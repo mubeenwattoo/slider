@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="https://pro.fontawesome.com/releases/v6.0.0-beta3/css/all.css" />
+<title>Slider</title>
+<style>
+  :root{
+    --frame-w: min(78vw, 1160px);
+    --aspect: 16/9;
+    --pad: clamp(14px, 2vw, 28px);
+    --gap: clamp(16px, 2.4vw, 32px);
+    --frame-bg: #eeeeee;
+    --arrow-bg: rgba(255,255,255,.96);
+    --arrow-shadow: 0 6px 18px rgba(0,0,0,.16);
+    --radius: 14px;
+    --speed: 520ms;
+    --tease: 22px;
+  }
+
+  *{ box-sizing:border-box }
+  body{ margin:0; background:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif }
+
+  .slider{
+    position:relative;
+    height:clamp(300px,56vw,640px);
+    display:grid;
+    place-items:center;
+    overflow:hidden;
+    touch-action: pan-y; /* allow page to scroll vertically */
+  }
+
+  .slider__frame{
+    position:absolute;
+    width:var(--frame-w);
+    aspect-ratio:var(--aspect);
+    background:var(--frame-bg);
+    z-index:1;
+    pointer-events:none;
+  }
+
+  .slider__viewport{
+    position:relative; width:100%; height:100%; overflow:hidden; z-index:2;
+    touch-action: pan-y;
+  }
+
+  .slider__track{
+    position:absolute; top:50%; left:0;
+    display:flex; gap:var(--gap);
+    transform:translate3d(0,-50%,0);
+    transition:transform var(--speed) cubic-bezier(.22,.61,.36,1);
+    will-change:transform;
+    list-style:none; margin:0; padding:0;
+    touch-action: none; /* we fully manage horizontal swipe */
+  }
+
+  .slide{
+    list-style:none;
+    flex:0 0 auto;
+    width:calc(var(--frame-w) - (var(--pad) * 2));
+    aspect-ratio:var(--aspect);
+    padding:var(--pad);
+    background:transparent;
+  }
+
+  .media{
+    position:relative; width:100%; height:100%;
+    border-radius:var(--radius); overflow:hidden; background:transparent;
+    transition: transform 200ms ease;
+  }
+
+  .media iframe{ position:absolute; inset:0; width:100%; height:100%; border:0; display:block }
+
+  /* NEW: transparent swipe-capture layer above the video */
+  .touch-layer{
+    position:absolute; inset:0; z-index:3;
+    background: transparent;
+    pointer-events: none; /* disabled by default (desktop) */
+  }
+  /* On small screens, enable the capture layer and let it grab horizontal gestures */
+  @media (max-width: 767px){
+    .touch-layer{
+      pointer-events: auto;
+      touch-action: none; /* ensure the browser doesn't hijack the swipe */
+    }
+  }
+
+  /* Floating arrows (desktop only; hidden on mobile) */
+  .nav{
+    position:absolute; left:0; top:0; transform:translate(-50%,-50%);
+    width:54px; height:54px; border:0;
+    background:transparent;
+    display:grid; place-items:center; cursor:pointer;
+    opacity:0; transition:opacity 140ms ease, transform 140ms ease;
+    z-index:5; user-select:none; pointer-events:auto;
+  }
+  .arrow-icon{ font-size:54px; line-height:1; }
+  .nav:hover{ transform:translate(-50%,-50%) scale(1.05); }
+
+  @media(hover:none){ .nav{ opacity:1 } }
+
+  @media (max-width: 767px){
+    .nav{ display:none !important; }
+    :root{
+      --frame-w: 92vw;
+      --pad: 12px;
+      --gap: 16px;
+    }
+    .media{ transition: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .slider__track{ transition:transform 200ms linear }
+  }
+</style>
+</head>
+<body>
+
+<section class="slider" id="videoSlider" aria-label="Video slider">
+  <div class="slider__frame" id="frame" aria-hidden="true"></div>
+
+  <div class="slider__viewport">
+    <ul class="slider__track" id="track"><!-- slides injected --></ul>
+  </div>
+
+  <!-- Desktop arrows (hidden on mobile) -->
+  <button class="nav" id="leftArrow" type="button" aria-label="Previous">
+    <i class="fa-light fa-arrow-left-long arrow-icon"></i>
+  </button>
+  <button class="nav" id="rightArrow" type="button" aria-label="Next">
+    <i class="fa-light fa-arrow-right-long arrow-icon"></i>
+  </button>
+</section>
+
+<script src="https://player.vimeo.com/api/player.js"></script>
+<script>
+(() => {
+  const VIMEO_IDS = [76979871, 22439234, 357274789];
+
+  const slider   = document.getElementById('videoSlider');
+  const frameEl  = document.getElementById('frame');
+  const track    = document.getElementById('track');
+  const leftBtn  = document.getElementById('leftArrow');
+  const rightBtn = document.getElementById('rightArrow');
+
+  /* Build slides (clones at both ends) — ADDED .touch-layer */
+  const slideHTML = id => `
+    <li class="slide">
+      <div class="media">
+        <iframe
+          src="https://player.vimeo.com/video/${id}?background=1&autoplay=1&muted=1&loop=1&byline=0&title=0&portrait=0&controls=0"
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowfullscreen loading="lazy"></iframe>
+        <div class="touch-layer" aria-hidden="true"></div>
+      </div>
+    </li>`;
+
+  track.insertAdjacentHTML('beforeend', slideHTML(VIMEO_IDS.at(-1)));
+  VIMEO_IDS.forEach(id => track.insertAdjacentHTML('beforeend', slideHTML(id)));
+  track.insertAdjacentHTML('beforeend', slideHTML(VIMEO_IDS[0]));
+
+  const slides = Array.from(track.children);
+  const N = VIMEO_IDS.length;
+
+  let vIdx = 1;            // virtual real index (1..N)
+  let centeredDomIdx = 1;  // DOM index currently centered (0..N+1)
+
+  /* Geometry */
+  function geometry(){
+    const rSlider = slider.getBoundingClientRect();
+    const rFrame  = frameEl.getBoundingClientRect();
+    const frameLeftInSlider = rFrame.left - rSlider.left;
+
+    const firstReal = slides[1];
+    const slideW    = firstReal.getBoundingClientRect().width;
+    const a0        = firstReal.offsetLeft;
+    const stepW     = slides[2].offsetLeft - slides[1].offsetLeft;
+    const base      = frameLeftInSlider + (rFrame.width - slideW)/2;
+
+    return { base, a0, stepW, slideW, rSlider, rFrame };
+  }
+
+  function centerDom(domIndex, animate = true){
+    centeredDomIdx = domIndex;
+    const { base } = geometry();
+    const slideEl = slides[domIndex];
+    const at = slideEl.offsetLeft;
+    const x = base - at;
+    if (!animate) {
+      track.style.transition = 'none';
+      track.style.transform = `translate3d(${x}px,-50%,0)`;
+      void track.offsetHeight; // reflow
+      track.style.transition = '';
+      return;
+    }
+    track.style.transform = `translate3d(${x}px,-50%,0)`;
+  }
+
+  function centerVirtual(dir = 0){
+    let targetDom = vIdx;
+    if (dir === +1 && centeredDomIdx === N)       targetDom = N+1;
+    else if (dir === -1 && centeredDomIdx === 1)  targetDom = 0;
+    else                                          targetDom = vIdx;
+    centerDom(targetDom, true);
+  }
+
+  track.addEventListener('transitionend', (e) => {
+    if (e.target !== track || e.propertyName !== 'transform') return;
+    if (centeredDomIdx === 0) { vIdx = N; centerDom(N, false); }
+    else if (centeredDomIdx === N+1) { vIdx = 1; centerDom(1, false); }
+    updatePlayback();
+  });
+
+  function updatePlayback(){
+    slides.forEach((li, i) => {
+      const frame = li.querySelector('iframe');
+      if (!frame) return;
+      const player = new Vimeo.Player(frame);
+      if (i === centeredDomIdx) player.play().catch(()=>{});
+      else player.pause().catch(()=>{});
+    });
+  }
+
+  function step(dir){
+    vIdx += dir; if (vIdx > N) vIdx = 1; if (vIdx < 1) vIdx = N;
+    centerVirtual(dir);
+  }
+
+  /* Desktop-only arrow/tease (unchanged from your last version) */
+  function clearTease(){
+    slides.forEach(li => { const m = li.querySelector('.media'); if (m) m.style.transform = ''; });
+  }
+  function tease(side){
+    if (window.matchMedia('(max-width: 767px)').matches) return;
+    clearTease();
+    if (side === 'right'){
+      const rightIdx = Math.min(centeredDomIdx + 1, slides.length - 1);
+      const r = slides[rightIdx]?.querySelector('.media');
+      if (r) r.style.transform = `translateX(calc(-1 * var(--tease)))`;
+    } else if (side === 'left'){
+      const leftIdx = Math.max(centeredDomIdx - 1, 0);
+      const l = slides[leftIdx]?.querySelector('.media');
+      if (l) l.style.transform = `translateX(var(--tease))`;
+    }
+  }
+  function handleMouseMove(e){
+    if (window.matchMedia('(max-width: 767px)').matches) return;
+    const { rSlider } = geometry();
+    const cx = e.clientX, cy = e.clientY;
+    const media = slides[centeredDomIdx].querySelector('.media');
+    const rm = media.getBoundingClientRect();
+    const beyondRight = cx > rm.right;
+    const beyondLeft  = cx < rm.left;
+    const xRel = Math.max(rSlider.left, Math.min(rSlider.right, cx)) - rSlider.left;
+    const yRel = Math.max(rSlider.top,  Math.min(rSlider.bottom, cy)) - rSlider.top;
+    if (beyondRight){
+      rightBtn.style.left = `${xRel}px`; rightBtn.style.top = `${yRel}px`;
+      rightBtn.style.opacity = '1'; leftBtn.style.opacity = '0'; tease('right');
+    } else if (beyondLeft){
+      leftBtn.style.left = `${xRel}px`; leftBtn.style.top = `${yRel}px`;
+      leftBtn.style.opacity = '1'; rightBtn.style.opacity = '0'; tease('left');
+    } else {
+      rightBtn.style.opacity = '0'; leftBtn.style.opacity = '0'; clearTease();
+    }
+  }
+  slider.addEventListener('mousemove', handleMouseMove);
+  slider.addEventListener('mouseleave', () => { rightBtn.style.opacity = '0'; leftBtn.style.opacity = '0'; clearTease(); });
+  rightBtn.addEventListener('click', (e) => { e.stopPropagation(); step(+1); });
+  leftBtn .addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
+
+  /* Touch/Pointer drag (now also works when finger is ON the video via .touch-layer) */
+  let startX=0, startTx=0, dragging=false;
+  const onNav = t => !!t.closest?.('.nav');
+
+  const startDrag = (e) => {
+    if (onNav(e.target)) return;
+    dragging = true;
+    slider.setPointerCapture(e.pointerId);
+    startX = e.clientX;
+    const m = /matrix\(1, 0, 0, 1, (-?\d+(\.\d+)?),/.exec(getComputedStyle(track).transform);
+    startTx = m ? parseFloat(m[1]) : 0;
+    track.style.transition = 'none';
+    clearTease();
+  };
+  const moveDrag = (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    track.style.transform = `translate3d(${startTx + dx}px,-50%,0)`;
+  };
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    track.style.transition = '';
+    const { base } = geometry();
+    const m = /matrix\(1, 0, 0, 1, (-?\d+(\.\d+)?),/.exec(getComputedStyle(track).transform);
+    const tx = m ? parseFloat(m[1]) : 0;
+    let best = centeredDomIdx, bestErr = Infinity;
+    for (let i=0;i<slides.length;i++){
+      const left = slides[i].offsetLeft;
+      const err  = Math.abs(base - left - tx);
+      if (err < bestErr){ bestErr = err; best = i; }
+    }
+    centerDom(best, true);
+    if (best === 0) vIdx = N; else if (best === N+1) vIdx = 1; else vIdx = best;
+    updatePlayback();
+  };
+
+  slider.addEventListener('pointerdown', startDrag, { passive:true });
+  slider.addEventListener('pointermove',  moveDrag,  { passive:true });
+  slider.addEventListener('pointerup',    endDrag,   { passive:true });
+  slider.addEventListener('pointercancel',endDrag,   { passive:true });
+
+  // Re-center on resize / orientation change
+  window.addEventListener('resize', () => centerDom(centeredDomIdx, false));
+  window.addEventListener('orientationchange', () => centerDom(centeredDomIdx, false));
+  new ResizeObserver(() => centerDom(centeredDomIdx, false)).observe(slider);
+
+  // Initial center
+  requestAnimationFrame(() => { centerDom(vIdx, false); updatePlayback(); });
+})();
+</script>
+</body>
+</html>
